@@ -15,25 +15,26 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
     setError('');
     setIsLoading(true);
     try {
-        await onLogin(username, password);
-        // Navigation will be handled by the App component's session listener
+      await onLogin(username, password);
     } catch (err: unknown) {
-        if (err instanceof Error) {
-            // Provide more user-friendly Firebase error messages
-            if (err.message.includes('auth/invalid-credential') || err.message.includes('auth/user-not-found') || err.message.includes('auth/wrong-password')) {
-                 setError('Email atau password salah.');
-            } else if (err.message.includes('auth/invalid-email')) {
-                setError('Format email tidak valid.');
-            } else {
-                 // Directly show the custom error message from our API logic or other generic errors
-                 setError(err.message || 'Terjadi kesalahan saat login. Coba lagi nanti.');
-            }
-            console.error(err);
+      if (err instanceof Error) {
+        if (
+          err.message.includes('auth/invalid-credential') ||
+          err.message.includes('auth/user-not-found') ||
+          err.message.includes('auth/wrong-password')
+        ) {
+          setError('Email atau password salah.');
+        } else if (err.message.includes('auth/invalid-email')) {
+          setError('Format email tidak valid.');
         } else {
-             setError('Terjadi kesalahan yang tidak diketahui.');
+          setError(err.message || 'Terjadi kesalahan saat login. Coba lagi nanti.');
         }
+      } else {
+        setError('Terjadi kesalahan yang tidak diketahui.');
+      }
+      console.error(err);
     } finally {
-        setIsLoading(false);
+      setIsLoading(false);
     }
   };
 
@@ -45,15 +46,14 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
             Login ke Akun Anda
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
-            Gunakan username (cth: santri) atau email lengkap. <br/> Password demo adalah "password123".
+            Gunakan username (cth: santri) atau email lengkap. <br />
+            Password demo adalah "password123".
           </p>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleLogin}>
           <div className="rounded-md shadow-sm -space-y-px">
             <div>
-              <label htmlFor="email-address" className="sr-only">
-                Email atau Username
-              </label>
+              <label htmlFor="email-address" className="sr-only">Email atau Username</label>
               <input
                 id="email-address"
                 name="email"
@@ -67,9 +67,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
               />
             </div>
             <div>
-              <label htmlFor="password" className="sr-only">
-                Password
-              </label>
+              <label htmlFor="password" className="sr-only">Password</label>
               <input
                 id="password"
                 name="password"
