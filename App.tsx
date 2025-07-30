@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect } from 'react';
 import { Role, User, Page } from './types';
 import Header from './components/Header';
@@ -17,24 +16,24 @@ import * as api from './api';
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentPage, setCurrentPage] = useState<Page>(Page.HOME);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true); // Now represents initial auth check
 
   useEffect(() => {
-    // Coba ambil sesi user saat aplikasi pertama kali dimuat
-    const checkSession = async () => {
-      try {
-        const user = await api.checkSession();
-        if (user) {
-          setCurrentUser(user);
-          navigateToDashboard(user);
-        }
-      } catch (error) {
-        // Tidak ada sesi aktif, tidak masalah
-      } finally {
-        setIsLoading(false);
+    // onSessionChange returns an `unsubscribe` function that we can use for cleanup
+    const unsubscribe = api.onSessionChange((user) => {
+      if (user) {
+        setCurrentUser(user);
+        navigateToDashboard(user);
+      } else {
+        setCurrentUser(null);
+        // Optional: redirect to home or login if they were on a protected page
+        // For now, we'll let the render logic handle it.
       }
-    };
-    checkSession();
+      setIsLoading(false);
+    });
+
+    // Cleanup subscription on unmount
+    return () => unsubscribe();
   }, []);
 
   const navigateTo = (page: Page) => {
@@ -57,28 +56,26 @@ const App: React.FC = () => {
       }
   }
 
-  const handleLogin = useCallback(async (username: string) => {
+  const handleLogin = useCallback(async (username: string, password?: string) => {
     try {
-      const user = await api.login(username, 'password'); // password diabaikan di API palsu
-      setCurrentUser(user);
-      navigateToDashboard(user);
+      // The onSessionChange listener will automatically handle setting the user and navigating
+      await api.login(username, password);
     } catch (error) {
-        if (error instanceof Error) {
-            console.error(error.message);
-            // Anda bisa menampilkan pesan error di UI login di sini
-        }
+        // This error should be passed to the LoginPage to be displayed
+        // We re-throw it so LoginPage's catch block can handle it.
+        throw error;
     }
   }, []);
 
   const handleLogout = async () => {
     await api.logout();
-    setCurrentUser(null);
+    setCurrentUser(null); // Explicitly set to null for faster UI update
     navigateTo(Page.HOME);
   };
   
   const renderPage = () => {
     if (isLoading) {
-        return <div className="flex justify-center items-center h-screen"><p>Loading...</p></div>;
+        return <div className="flex justify-center items-center h-screen"><p>Memeriksa sesi Anda...</p></div>;
     }
 
     if (!currentUser) {
@@ -107,7 +104,12 @@ const App: React.FC = () => {
       case Page.EDUCATION:
         return <EducationPage />;
       case Page.HOME:
+         // If logged in and on home, maybe redirect to dashboard? For now, allow it.
          return <HomePage navigateToLogin={() => navigateTo(Page.LOGIN)} />;
+      case Page.LOGIN:
+         // If user is somehow loaded while on login page, redirect them.
+         navigateToDashboard(currentUser);
+         return null;
       default:
         // Saat user sudah login, defaultnya adalah dashboard mereka
         navigateToDashboard(currentUser);

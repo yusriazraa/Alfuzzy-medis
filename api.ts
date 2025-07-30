@@ -1,105 +1,195 @@
 import { Role, User, HealthRecord, FuzzyRule } from './types';
-
-// Alamat base URL dari server backend Anda
-const API_BASE_URL = 'http://localhost:3001/api';
+import { db, auth } from './firebaseConfig';
+import { 
+    collection, 
+    getDocs, 
+    addDoc, 
+    deleteDoc, 
+    doc, 
+    query, 
+    where,
+    orderBy,
+    getDoc,
+    Timestamp
+} from "firebase/firestore";
+import { 
+    signInWithEmailAndPassword,
+    signOut,
+    onAuthStateChanged,
+    User as FirebaseUser
+} from "firebase/auth";
 
 // =================================================================
-// FUNGSI API YANG TERHUBUNG KE BACKEND
+// FIREBASE API IMPLEMENTATION
+// This file now connects to a real Firebase backend.
+//
+// IMPORTANT FOR DEMO:
+// The database must be seeded with initial data for this to work.
+// Collections needed: 'users', 'fuzzyRules', 'healthRecords', 'symptoms'.
+//
+// DEMO LOGIN CREDENTIALS (must exist in Firebase Auth & 'users' collection):
+// - Username: santri   => Email: santri@demo.com
+// - Username: orangtua => Email: orangtua@demo.com
+// - Username: admin    => Email: admin@demo.com
+// - Password for all: "password123"
 // =================================================================
 
-// --- Autentikasi ---
+// --- Helper to convert Firestore Timestamps ---
+const convertTimestamp = (record: any) => {
+    if (record.date && record.date instanceof Timestamp) {
+        return { ...record, date: record.date.toDate().toISOString() };
+    }
+    return record;
+};
 
-export const login = async (username: string, _password?: string): Promise<User> => {
-    // Di aplikasi nyata, Anda juga harus mengirim password
-    const response = await fetch(`${API_BASE_URL}/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username }),
-    });
+// --- Authentication ---
 
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Login gagal.');
+const usernameToEmail: Record<string, string> = {
+    'santri': 'santri@demo.com',
+    'orangtua': 'orangtua@demo.com',
+    'admin': 'admin@demo.com',
+}
+
+export const login = async (username: string, password?: string): Promise<User> => {
+    let email: string | undefined;
+    const lowerCaseUsername = username.toLowerCase();
+
+    // Handle both simple usernames (e.g., "santri") and full emails
+    if (lowerCaseUsername.includes('@')) {
+        email = lowerCaseUsername;
+    } else {
+        email = usernameToEmail[lowerCaseUsername];
     }
 
-    const user: User = await response.json();
-    sessionStorage.setItem('loggedInUser', JSON.stringify(user));
-    return user;
+    if (!email) {
+        throw new Error('Username tidak valid. Gunakan username (cth: santri) atau email lengkap.');
+    }
+    if (!password) {
+        throw new Error('Password diperlukan.');
+    }
+
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    const firebaseUser = userCredential.user;
+
+    const userDocRef = doc(db, "users", firebaseUser.uid);
+    const userDocSnap = await getDoc(userDocRef);
+
+    if (!userDocSnap.exists()) {
+        throw new Error("User data not found in database.");
+    }
+    
+    // Combine auth data with firestore data
+    const userData = userDocSnap.data() as Omit<User, 'id'>;
+    return { id: firebaseUser.uid, ...userData };
 };
 
 export const logout = (): Promise<void> => {
-    sessionStorage.removeItem('loggedInUser');
-    return Promise.resolve();
+    return signOut(auth);
 };
 
-export const checkSession = (): Promise<User | null> => {
-    const userJson = sessionStorage.getItem('loggedInUser');
-    const user = userJson ? JSON.parse(userJson) : null;
-    return Promise.resolve(user);
+// Replaces checkSession. Sets up a listener.
+export const onSessionChange = (callback: (user: User | null) => void): (() => void) => {
+    return onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
+        if (firebaseUser) {
+            try {
+                const userDocRef = doc(db, "users", firebaseUser.uid);
+                const userDocSnap = await getDoc(userDocRef);
+                if (userDocSnap.exists()) {
+                    const userData = userDocSnap.data() as Omit<User, 'id'>;
+                    callback({ id: firebaseUser.uid, ...userData });
+                } else {
+                    console.error("User logged in but no data in Firestore.");
+                    callback(null);
+                }
+            } catch (error) {
+                console.error("Error fetching user data:", error);
+                callback(null);
+            }
+        } else {
+            callback(null);
+        }
+    });
 };
 
 
-// --- Manajemen Aturan Fuzzy (Admin) ---
-
+// --- Fuzzy Rules Management (for Admin) ---
 export const getFuzzyRules = async (): Promise<FuzzyRule[]> => {
-    const response = await fetch(`${API_BASE_URL}/rules`);
-    if (!response.ok) {
-        throw new Error('Gagal memuat aturan fuzzy.');
-    }
-    return response.json();
+    const rulesCollection = collection(db, 'fuzzyRules');
+    const q = query(rulesCollection);
+    const rulesSnapshot = await getDocs(q);
+    return rulesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as FuzzyRule));
 };
 
 export const addFuzzyRule = async (newRuleData: Omit<FuzzyRule, 'id'>): Promise<FuzzyRule> => {
-    const response = await fetch(`${API_BASE_URL}/rules`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newRuleData),
-    });
-    if (!response.ok) {
-        throw new Error('Gagal menambahkan aturan baru.');
-    }
-    return response.json();
+    const rulesCollection = collection(db, 'fuzzyRules');
+    const docRef = await addDoc(rulesCollection, newRuleData);
+    return { id: docRef.id, ...newRuleData };
 };
 
-export const deleteFuzzyRule = async (ruleId: string): Promise<void> => {
-    const response = await fetch(`${API_BASE_URL}/rules/${ruleId}`, {
-        method: 'DELETE',
-    });
-    if (!response.ok) {
-        throw new Error('Gagal menghapus aturan.');
-    }
+export const deleteFuzzyRule = (ruleId: string): Promise<void> => {
+    const ruleDoc = doc(db, 'fuzzyRules', ruleId);
+    return deleteDoc(ruleDoc);
 };
 
 
-// --- Riwayat Kesehatan ---
-
+// --- Health Records ---
 export const getHealthHistoryForUser = async (user: User): Promise<HealthRecord[]> => {
-    const response = await fetch(`${API_BASE_URL}/history/${user.id}`);
-    if (!response.ok) {
-        throw new Error('Gagal memuat riwayat kesehatan.');
+    const recordsCollection = collection(db, 'healthRecords');
+    let q;
+
+    if (user.role === Role.SANTRI) {
+        q = query(recordsCollection, where("santriId", "==", user.id), orderBy("date", "desc"));
+    } else if (user.role === Role.ORANG_TUA && user.childId) {
+        q = query(recordsCollection, where("santriId", "==", user.childId), orderBy("date", "desc"));
+    } else {
+        return []; // No records for other roles or parents without childId
     }
-    // Backend sudah mengurus logika untuk mengambil data anak jika peran adalah ORANG_TUA
-    return response.json();
+    
+    const recordsSnapshot = await getDocs(q);
+    return recordsSnapshot.docs.map(doc => {
+  const data = doc.data() as Record<string, any>;
+  return convertTimestamp({ id: doc.id, ...data }) as HealthRecord;
+});
 };
 
-export const addHealthRecord = async (santriId: string, screeningResult: Omit<HealthRecord, 'id' | 'santriId' | 'date' | 'symptoms_text'>): Promise<HealthRecord> => {
-     const response = await fetch(`${API_BASE_URL}/records`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ santriId, ...screeningResult }),
-     });
-     if (!response.ok) {
-        throw new Error('Gagal menyimpan catatan kesehatan.');
-     }
-     return response.json();
+export const addHealthRecord = async (santriId: string, screeningResult: Omit<HealthRecord, 'id' | 'santriId' | 'date'>): Promise<HealthRecord> => {
+     const newRecordData = {
+        santriId: santriId,
+        date: Timestamp.now(), // Use Firestore Timestamp
+        ...screeningResult,
+      };
+      const recordsCollection = collection(db, 'healthRecords');
+      const docRef = await addDoc(recordsCollection, newRecordData);
+      
+      const addedRecord: HealthRecord = {
+          id: docRef.id,
+          date: newRecordData.date.toDate().toISOString(),
+          santriId: newRecordData.santriId,
+          symptoms: newRecordData.symptoms,
+          diagnosis: newRecordData.diagnosis,
+          recommendation: newRecordData.recommendation
+      }
+      return addedRecord;
 };
 
-// --- Data Umum ---
-
+// --- General Data ---
+// Assumes a 'symptoms' collection with a single document 'all' containing a 'list' array field.
 export const getAllSymptoms = async (): Promise<string[]> => {
-    const response = await fetch(`${API_BASE_URL}/symptoms`);
-    if (!response.ok) {
-        throw new Error('Gagal memuat daftar gejala.');
+    try {
+        const symptomsDocRef = doc(db, 'symptoms', 'all');
+        const docSnap = await getDoc(symptomsDocRef);
+        if (docSnap.exists() && docSnap.data().list) {
+            return docSnap.data().list as string[];
+        }
+        console.warn("Symptoms document not found or is empty. Returning default list.");
+        // Fallback for demo purposes if firestore is not seeded
+        return [
+            'Demam', 'Batuk', 'Pilek', 'Sakit Tenggorokan', 'Nyeri Menelan', 'Bengkak Pipi',
+            'Mata Merah', 'Mata Berair', 'Nyeri Otot', 'Sakit Kepala', 'Lecet Kulit Berisi Air',
+            'Ruam Merah', 'Gatal Hebat Malam Hari', 'Luka di Sudut Bibir', 'Sariawan'
+        ];
+    } catch (error) {
+        console.error("Error fetching symptoms: ", error);
+        return []; // Return empty on error
     }
-    return response.json();
 };
