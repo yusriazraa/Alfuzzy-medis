@@ -64,7 +64,6 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
                 placeholder="Email atau Username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                autoCapitalize="none"
               />
             </div>
             <div>
